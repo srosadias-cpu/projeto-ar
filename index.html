@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Árvore em pontos</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; font-family: system-ui, sans-serif; }
+  canvas { display: block; touch-action: none; }
+  #aviso {
+    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    color: #cfd8c8; font-size: 15px; text-align: center; padding: 0 24px;
+  }
+  #botao {
+    position: fixed; left: 50%; transform: translateX(-50%);
+    bottom: calc(24px + env(safe-area-inset-bottom, 0px));
+    padding: 14px 26px; border: 1px solid #cfd8c8; border-radius: 999px;
+    background: rgba(0, 0, 0, 0.55); color: #e9efe4; text-decoration: none; font-size: 15px;
+  }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<div id="aviso">A carregar…</div>
+<a id="botao" href="#" target="_blank" rel="noopener"></a>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+// ====== AJUSTES (podes mudar estes valores) ======
+const FICHEIRO = 'arvore1_pontos.bin';
+const LINK = 'https://www.instagram.com/';   // troca pelo teu link
+const TEXTO_BOTAO = 'Ver no Instagram';
+const MAX_PONTOS = 120000;                   // menos pontos = mais leve no telemóvel
+const TAMANHO_PONTO = 0.012;
+const BRILHO = 1.5;                          // sobe se as cores parecerem escuras
+// =================================================
+
+const botao = document.getElementById('botao');
+botao.href = LINK;
+botao.textContent = TEXTO_BOTAO;
+const aviso = document.getElementById('aviso');
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setClearColor(0x000000);
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 100);
+camera.position.set(0, 1.2, 3.4);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 1, 0);
+controls.enableDamping = true;
+controls.autoRotate = true;
+controls.autoRotateSpeed = 0.6;
+controls.update();
+
+async function carregar() {
+  const resp = await fetch(FICHEIRO);
+  if (!resp.ok) throw new Error('ficheiro em falta');
+  const buf = await resp.arrayBuffer();
+  const dv = new DataView(buf);
+  const total = dv.getUint32(0, true);
+  const escala = dv.getFloat32(4, true);
+
+  const pos16 = new Int16Array(buf, 8, total * 3);
+  const cor8 = new Uint8Array(buf, 8 + total * 6, total * 3);
+
+  const n = Math.min(total, MAX_PONTOS);
+  const passo = total / n;
+  const posicoes = new Float32Array(n * 3);
+  const cores = new Float32Array(n * 3);
+  const c = new THREE.Color();
+
+  for (let i = 0; i < n; i++) {
+    const j = Math.floor(i * passo);
+    posicoes[i * 3]     = pos16[j * 3]     / escala;
+    posicoes[i * 3 + 1] = pos16[j * 3 + 1] / escala;
+    posicoes[i * 3 + 2] = pos16[j * 3 + 2] / escala;
+    c.setRGB(
+      Math.min(cor8[j * 3]     / 255 * BRILHO, 1),
+      Math.min(cor8[j * 3 + 1] / 255 * BRILHO, 1),
+      Math.min(cor8[j * 3 + 2] / 255 * BRILHO, 1),
+      THREE.SRGBColorSpace
+    );
+    cores[i * 3] = c.r; cores[i * 3 + 1] = c.g; cores[i * 3 + 2] = c.b;
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(posicoes, 3));
+  geo.setAttribute('color', new THREE.BufferAttribute(cores, 3));
+  const mat = new THREE.PointsMaterial({ size: TAMANHO_PONTO, vertexColors: true, sizeAttenuation: true });
+  scene.add(new THREE.Points(geo, mat));
+  aviso.remove();
+}
+
+carregar().catch(() => {
+  aviso.textContent = 'Não consegui abrir ' + FICHEIRO + '. Confirma que está na mesma pasta que o index.html.';
+});
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+renderer.setAnimationLoop(() => {
+  controls.update();
+  renderer.render(scene, camera);
+});
+</script>
+</body>
+</html>
