@@ -63,14 +63,31 @@ const FICHEIRO = 'arvore1_pontos.bin';
 const MARCADOR = 'targets.mind';             // ficheiro criado a partir do teu desenho
 const LINK = 'https://www.instagram.com/';   // troca pelo teu link
 const TEXTO_BOTAO = 'Ver no Instagram';
-const MAX_PONTOS = 120000;                   // menos pontos = mais leve no telemóvel
-const TAMANHO_PONTO = 0.012;
-const BRILHO = 1.5;                          // sobe se as cores parecerem escuras
+const MAX_PONTOS = 200000;                   // menos pontos = mais leve no telemóvel (o ficheiro tem 200000)
+const TAMANHO_PONTO = 0.009;                 // pontos mais pequenos = árvore mais densa e detalhada
+const BRILHO = 1.3;                          // sobe se as cores parecerem escuras
+
+// aspeto escuro com luz (como na referência)
+const DENSIDADE_ESCURA = 0.22;               // parte dos pontos visível no escuro (0 a 1; menor = mais vazio)
+const ESCURIDAO = 0.16;                      // brilho dos pontos no escuro (0 a 1)
+const RAIO_LUZ = 0.6;                        // tamanho da zona iluminada (a árvore tem 2 de altura)
+const TEMPO_LUZ = 2.5;                       // segundos que a luz demora a apagar depois de tocares
+const LUZ_AUTOMATICA = true;                 // uma luz lenta passeia sozinha pela árvore quando ninguém toca
+const INTENSIDADE_AUTO = 0.55;               // força dessa luz (0 a 1)
+const COR_LUZ = [1.0, 0.95, 0.82];           // tom da luz (R, G, B de 0 a 1); mais quente = mais amarelado
+const PONTOS_SOLTOS = 2500;                  // pontinhos soltos à volta da árvore (0 = nenhum)
 const ESCALA_MARCADOR = 0.35;                // tamanho da árvore em relação à largura do desenho
 const POSICAO_X = 0;                         // mover a árvore no papel (esquerda -, direita +)
 const POSICAO_Y = 0;                         // mover a árvore no papel (baixo -, cima +)
 
-// efeito de dispersão ao tocar
+// scan inicial (de baixo para cima)
+const DURACAO_SCAN = 3.5;                    // segundos que o scan demora a subir a árvore
+const DISPERSAO_PONTOS = 0.35;               // maior = pontos a aparecer mais soltos, um a um
+const ZONA_BRILHO = 0.18;                    // espessura da faixa luminosa na frente do scan
+const TAMANHO_BRILHO = 1.8;                  // quanto os pontos crescem ao aparecer
+const COR_BRILHO = [0.85, 1.0, 0.75];        // cor da frente do scan (R, G, B de 0 a 1)
+
+// dispersão ao tocar na árvore
 const RAIO_TOQUE = 0.35;                     // tamanho da zona afetada (a árvore tem 2 de altura)
 const FORCA_TOQUE = 0.7;                     // até onde os pontos voam
 const TEMPO_SAIDA = 0.25;                    // segundos até à dispersão máxima
@@ -108,11 +125,24 @@ controls.update();
 const arvore = new THREE.Group();
 scene.add(arvore);
 
-// ====== Material dos pontos (com dispersão) ======
+// ====== Material dos pontos (scan + dispersão) ======
+const FIM_SCAN = 2.0 + DISPERSAO_PONTOS + ZONA_BRILHO + 0.05;   // altura final do scan
+
 const uni = {
   uSize:  { value: TAMANHO_PONTO },
   uPx:    { value: 1 },
   uScale: { value: 400 },
+  uScan:  { value: -1 },                   // -1 = tudo escondido
+  uBand:  { value: DISPERSAO_PONTOS },
+  uFlash: { value: ZONA_BRILHO },
+  uFlashSize: { value: TAMANHO_BRILHO },
+  uFlashColor: { value: new THREE.Vector3(...COR_BRILHO) },
+  uDens:  { value: DENSIDADE_ESCURA },
+  uEscuro: { value: ESCURIDAO },
+  uLuz:   { value: new THREE.Vector3(0, 1, 0) },
+  uLuzInt: { value: 0 },
+  uLuzRaio: { value: RAIO_LUZ },
+  uCorLuz: { value: new THREE.Vector3(...COR_LUZ) },
   uHit:   { value: new THREE.Vector3(0, 0, 0) },
   uForca: { value: 0 },
   uRaio:  { value: RAIO_TOQUE },
@@ -122,23 +152,46 @@ const uni = {
 const materialPontos = new THREE.ShaderMaterial({
   uniforms: uni,
   vertexColors: true,
-  transparent: false,
   vertexShader: `
     attribute vec3 aRand;
-    uniform float uSize, uPx, uScale, uForca, uRaio, uAlcance;
-    uniform vec3 uHit;
+    uniform float uSize, uPx, uScale, uScan, uBand, uFlash, uFlashSize, uForca, uRaio, uAlcance, uDens, uEscuro, uLuzInt, uLuzRaio;
+    uniform vec3 uFlashColor, uHit, uLuz, uCorLuz;
     varying vec3 vColor;
     void main() {
-      vec3 p = position;
-      float d = distance(p, uHit);
+      float r = aRand.x * 0.5 + 0.5;
+      float rv = aRand.y * 0.5 + 0.5;
+      float edge = (uScan - position.y) - r * uBand;
+
+      // luz: perto dela aparecem mais pontos e ficam mais claros
+      float L = smoothstep(uLuzRaio, 0.0, distance(position, uLuz)) * uLuzInt;
+      float mostra = mix(uDens, 1.0, L);
+
+      if (edge < 0.0 || rv > mostra) {
+        gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+        gl_PointSize = 0.0;
+        vColor = vec3(0.0);
+        return;
+      }
+      float flash = 1.0 - smoothstep(0.0, uFlash, edge);
+      vec3 p = position + aRand * 0.025 * flash;
+
+      // dispersão ao tocar
+      float d = distance(position, uHit);
       float w = smoothstep(uRaio, 0.0, d);
-      vec3 dir = normalize(p - uHit + aRand * 0.35 + vec3(0.0001));
-      float forca = w * uForca * uAlcance * (0.5 + 0.9 * abs(aRand.x));
-      p += dir * forca + aRand * forca * 0.5;
+      vec3 dir = normalize(position - uHit + aRand * 0.35 + vec3(0.0001));
+      float f = w * uForca * uAlcance * (0.5 + 0.9 * abs(aRand.x));
+      p += dir * f + aRand * f * 0.5;
+
       vec4 mv = modelViewMatrix * vec4(p, 1.0);
-      gl_PointSize = uSize * uPx * (uScale / -mv.z) * (1.0 - 0.45 * w * uForca);
+      gl_PointSize = uSize * uPx * (uScale / -mv.z)
+                   * (0.75 + 0.55 * L)
+                   * (1.0 + (uFlashSize - 1.0) * flash)
+                   * (1.0 - 0.45 * w * uForca);
       gl_Position = projectionMatrix * mv;
-      vColor = color;
+
+      float brilho = mix(uEscuro, 1.0, L);
+      vec3 base = color * brilho * mix(vec3(1.0), uCorLuz, L);
+      vColor = mix(base, uFlashColor, flash * 0.85);
     }
   `,
   fragmentShader: `
@@ -152,8 +205,10 @@ const materialPontos = new THREE.ShaderMaterial({
   `
 });
 
-let posicoes = null;      // posições locais dos pontos (para saber onde tocaste)
+let posicoes = null;
 let nPontos = 0;
+let materialSoltos = null;
+let arAtivo = false;
 
 async function carregar() {
   const resp = await fetch(FICHEIRO);
@@ -198,12 +253,61 @@ async function carregar() {
   const pontos = new THREE.Points(geo, materialPontos);
   pontos.frustumCulled = false;
   arvore.add(pontos);
+
+  if (PONTOS_SOLTOS > 0) {
+    const ps = new Float32Array(PONTOS_SOLTOS * 3);
+    for (let i = 0; i < PONTOS_SOLTOS; i++) {
+      ps[i * 3]     = (Math.random() * 2 - 1) * 1.5;
+      ps[i * 3 + 1] = Math.random() * 2.4;
+      ps[i * 3 + 2] = (Math.random() * 2 - 1) * 1.5;
+    }
+    const geoS = new THREE.BufferGeometry();
+    geoS.setAttribute('position', new THREE.BufferAttribute(ps, 3));
+    materialSoltos = new THREE.PointsMaterial({ size: TAMANHO_PONTO * 0.9, color: new THREE.Color(0.55, 0.6, 0.55), sizeAttenuation: true });
+    arvore.add(new THREE.Points(geoS, materialSoltos));
+  }
+
   aviso.remove();
+  if (!arAtivo) iniciarScan();
 }
 
 carregar().catch(() => {
   aviso.textContent = 'Não consegui abrir ' + FICHEIRO + '. Confirma que está na mesma pasta que o index.html.';
 });
+
+// ====== Tempo do scan e da dispersão ======
+let t0 = null;                 // início do scan (null = ainda não começou)
+let instanteToque = -1000;     // início da última dispersão
+
+const autoPos = new THREE.Vector3();
+
+function iniciarScan() { t0 = performance.now() / 1000; }
+
+function atualizarEfeito(r) {
+  const agora = performance.now() / 1000;
+
+  if (t0 === null) uni.uScan.value = -1;
+  else uni.uScan.value = -0.1 + Math.min((agora - t0) / DURACAO_SCAN, 1) * (FIM_SCAN + 0.1);
+
+  const t = agora - instanteToque;
+  let f = 0;
+  if (t >= 0) f = t < TEMPO_SAIDA ? t / TEMPO_SAIDA : Math.exp(-(t - TEMPO_SAIDA) * (3.0 / TEMPO_REGRESSO));
+  uni.uForca.value = f < 0.005 ? 0 : f;
+
+  // luz: a do toque (acende depressa e apaga devagar) ou a automática
+  let luzToque = 0;
+  if (t >= 0) luzToque = t < 0.15 ? t / 0.15 : Math.exp(-(t - 0.15) * (3.0 / TEMPO_LUZ));
+  if (luzToque < 0.01) luzToque = 0;
+  const autoInt = LUZ_AUTOMATICA ? INTENSIDADE_AUTO : 0;
+  autoPos.set(0.55 * Math.sin(agora * 0.5), 1.1 + 0.6 * Math.sin(agora * 0.37 + 1), 0.4 * Math.cos(agora * 0.43));
+  const mistura = Math.min(luzToque / 0.35, 1);
+  uni.uLuz.value.copy(autoPos).lerp(uni.uHit.value, mistura);
+  uni.uLuzInt.value = Math.max(autoInt, luzToque);
+
+  const tam = r.getSize(new THREE.Vector2());
+  uni.uScale.value = tam.y * 0.5;
+  uni.uPx.value = r.getPixelRatio();
+}
 
 // ====== Toque: descobrir que ponto da árvore foi tocado ======
 const raycaster = new THREE.Raycaster();
@@ -211,10 +315,9 @@ const ndc = new THREE.Vector2();
 const inv = new THREE.Matrix4();
 const o = new THREE.Vector3();
 const d = new THREE.Vector3();
-let instanteToque = -1000;
 
 function tocar(clientX, clientY, cam, dom) {
-  if (!posicoes) return;
+  if (!posicoes || t0 === null) return;
   const r = dom.getBoundingClientRect();
   ndc.set(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
   raycaster.setFromCamera(ndc, cam);
@@ -224,8 +327,10 @@ function tocar(clientX, clientY, cam, dom) {
   d.copy(raycaster.ray.direction).transformDirection(inv);
 
   const lim2 = TOLERANCIA_TOQUE * TOLERANCIA_TOQUE;
+  const alturaVisivel = uni.uScan.value - DISPERSAO_PONTOS;   // só conta pontos que o scan já mostrou
   let melhorT = Infinity, melhor = -1;
   for (let i = 0; i < nPontos; i++) {
+    if (posicoes[i * 3 + 1] > alturaVisivel) continue;
     const vx = posicoes[i * 3] - o.x, vy = posicoes[i * 3 + 1] - o.y, vz = posicoes[i * 3 + 2] - o.z;
     const t = vx * d.x + vy * d.y + vz * d.z;
     if (t < 0 || t >= melhorT) continue;
@@ -237,17 +342,7 @@ function tocar(clientX, clientY, cam, dom) {
   instanteToque = performance.now() / 1000;
 }
 
-function atualizarEfeito(r) {
-  const t = performance.now() / 1000 - instanteToque;
-  let f = 0;
-  if (t >= 0) f = t < TEMPO_SAIDA ? t / TEMPO_SAIDA : Math.exp(-(t - TEMPO_SAIDA) * (3.0 / TEMPO_REGRESSO));
-  uni.uForca.value = f < 0.005 ? 0 : f;
-  const tam = r.getSize(new THREE.Vector2());
-  uni.uScale.value = tam.y * 0.5;
-  uni.uPx.value = r.getPixelRatio();
-}
-
-// toque simples na vista normal
+// toque simples na vista normal (arrastar continua a rodar a árvore)
 let inicio = null;
 renderer.domElement.addEventListener('pointerdown', (e) => {
   inicio = { x: e.clientX, y: e.clientY, t: performance.now() };
@@ -261,9 +356,6 @@ renderer.domElement.addEventListener('pointerup', (e) => {
 });
 
 // ====== AR com marcador (o desenho no papel) ======
-let arAtivo = false;
-let arCam = null, arDom = null, arRenderer = null;
-
 async function iniciarAR() {
   if (arAtivo || !nPontos) return;
   arAtivo = true;
@@ -283,11 +375,13 @@ async function iniciarAR() {
     arvore.scale.setScalar(ESCALA_MARCADOR);
     arvore.position.set(POSICAO_X, POSICAO_Y, 0);
     uni.uSize.value = TAMANHO_PONTO * ESCALA_MARCADOR;
+    if (materialSoltos) materialSoltos.size = TAMANHO_PONTO * 0.9 * ESCALA_MARCADOR;
     ancora.group.add(arvore);
+
+    t0 = null;   // a árvore fica escondida até o desenho ser reconhecido
 
     await mindar.start();
 
-    arCam = c2; arDom = r2.domElement; arRenderer = r2;
     renderer.setAnimationLoop(null);
     renderer.domElement.style.display = 'none';
     r2.setAnimationLoop(() => {
@@ -295,19 +389,26 @@ async function iniciarAR() {
       r2.render(s2, c2);
     });
 
+    // tocar ou arrastar o dedo sobre a árvore dispersa os pontos
     let ultimo = 0;
     const aoToque = (e) => {
       const agora = performance.now();
       if (agora - ultimo < 60) return;
       ultimo = agora;
-      tocar(e.clientX, e.clientY, arCam, arDom);
+      tocar(e.clientX, e.clientY, c2, r2.domElement);
     };
     arContainer.addEventListener('pointerdown', aoToque);
-    arContainer.addEventListener('pointermove', (e) => { if (e.buttons || e.pointerType === 'touch') aoToque(e); });
+    arContainer.addEventListener('pointermove', (e) => {
+      if (e.buttons || e.pointerType === 'touch') aoToque(e);
+    });
 
     voltar.style.display = 'block';
     dica.style.display = 'block';
-    ancora.onTargetFound = () => { dica.style.display = 'none'; };
+    let jaVisto = false;
+    ancora.onTargetFound = () => {
+      dica.style.display = 'none';
+      if (!jaVisto) { jaVisto = true; iniciarScan(); }
+    };
     ancora.onTargetLost = () => { dica.style.display = 'block'; };
   } catch (e) {
     nota.textContent = 'Não consegui abrir a câmara ou o marcador (' + MARCADOR + '). Confirma a permissão da câmara e que o ficheiro existe.';
